@@ -1,0 +1,410 @@
+from __future__ import annotations
+
+import asyncio
+import csv
+import io
+import itertools
+import json
+import multiprocessing
+import os
+import time
+import uuid
+import zipfile
+from contextlib import asynccontextmanager
+from pathlib import Path
+
+import numpy as np
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field, ValidationError
+
+from .config import CaseConfig
+from .engine import SPACE_CHARGE_WARNING, atomic_json, gpu_info, run_job
+from .geometry import derive
+from .inlet import parse_distribution
+
+ROOT = Path(__file__).resolve().parents[2]
+DATA = Path(os.environ.get("MEMORY_HOLE_DATA", str(ROOT / "data"))).resolve()
+JOBS = DATA / "jobs"
+DISTRIBUTIONS = DATA / "distributions"
+WORKERS = {}
+
+
+def job_dir(job_id):
+    if len(job_id) != 32 or not job_id.isalnum() or not (JOBS / job_id).is_dir():
+        raise HTTPException(404, "ジョブが見つかりません。")
+    return JOBS / job_id
+
+
+def read_status(directory):
+    try:
+        return json.loads((directory / "status.json").read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {"status": "queued", "stage": "待機中"}
+
+
+async def scheduler():
+    while True:
+        for jid, proc in list(WORKERS.items()):
+            if not proc.is_alive():
+                proc.join()
+                del WORKERS[jid]
+                directory = JOBS / jid
+                if read_status(directory)["status"] == "running":
+                    atomic_json(
+                        directory / "status.json",
+                        dict(
+                            status="failed",
+                            stage="ワーカープロセスが終了しました。チェックポイントから再開できます。",
+                        ),
+                    )
+        if not WORKERS:
+            for directory in sorted(JOBS.iterdir(), key=lambda p: p.stat().st_mtime):
+                if directory.is_dir() and read_status(directory)["status"] == "queued":
+                    proc = multiprocessing.get_context("spawn").Process(
+                        target=run_job, args=(str(directory), str(DISTRIBUTIONS))
+                    )
+                    proc.start()
+                    WORKERS[directory.name] = proc
+                    break
+        await asyncio.sleep(0.3)
+
+
+@asynccontextmanager
+async def lifespan(app):
+    JOBS.mkdir(parents=True, exist_ok=True)
+    DISTRIBUTIONS.mkdir(parents=True, exist_ok=True)
+    for directory in JOBS.iterdir():
+        if directory.is_dir() and read_status(directory)["status"] == "running":
+            atomic_json(
+                directory / "status.json",
+                dict(status="paused", stage="前回終了時のチェックポイントから再開可能"),
+            )
+    task = asyncio.create_task(scheduler())
+    yield
+    task.cancel()
+    for jid in WORKERS:
+        (JOBS / jid / "pause.request").touch()
+    for proc in WORKERS.values():
+        await asyncio.to_thread(proc.join, 5)
+    WORKERS.clear()
+
+
+app = FastAPI(title="Memory Hole Simulator", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def local_origin_only(request: Request, call_next):
+    host = request.headers.get("host", "").split(":")[0]
+    if host not in {"localhost", "127.0.0.1", "testserver"}:
+        return JSONResponse(status_code=403, content={"detail": "ローカルホストからアクセスしてください。"})
+    origin = request.headers.get("origin")
+    if (
+        request.method not in {"GET", "HEAD", "OPTIONS"}
+        and origin
+        and origin
+        not in {
+            "http://localhost:8765",
+            "http://127.0.0.1:8765",
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
+        }
+    ):
+        return JSONResponse(status_code=403, content={"detail": "異なるサイトからの操作は受け付けません。"})
+    return await call_next(request)
+
+
+@app.exception_handler(ValueError)
+async def value_error(request, exc):
+    return JSONResponse(status_code=400, content={"detail": str(exc)})
+
+
+@app.get("/api/defaults")
+def defaults():
+    preset = DATA / "preset.json"
+    c = (
+        CaseConfig.model_validate_json(preset.read_text(encoding="utf-8"))
+        if preset.exists()
+        else CaseConfig()
+    )
+    return {"config": c.model_dump(), "derived": derive(c)}
+
+
+@app.get("/api/system")
+def system():
+    return {"gpu": gpu_info(), "active_workers": len(WORKERS), "app_version": "0.1.0"}
+
+
+@app.post("/api/geometry")
+def geometry(config: CaseConfig):
+    return derive(config)
+
+
+def create_job(config):
+    derive(config)
+    from .inlet import verify_metadata
+
+    for species in [*config.ions, config.electron]:
+        if species.distribution_id:
+            sid = species.distribution_id
+            if len(sid) != 32 or not sid.isalnum() or not (DISTRIBUTIONS / (sid + ".json")).exists():
+                raise ValueError("入口分布が見つかりません。再取込してください。")
+            verify_metadata(config, json.loads((DISTRIBUTIONS / (sid + ".json")).read_text(encoding="utf-8")))
+    jid = uuid.uuid4().hex
+    directory = JOBS / jid
+    directory.mkdir()
+    atomic_json(directory / "config.json", config.model_dump())
+    atomic_json(
+        directory / "status.json", dict(status="queued", stage="待機中", created_at=time.time(), progress=0)
+    )
+    return jid
+
+
+@app.post("/api/jobs")
+def submit(config: CaseConfig):
+    return {"id": create_job(config)}
+
+
+@app.get("/api/jobs")
+def jobs():
+    result = []
+    for directory in sorted(JOBS.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
+        if directory.is_dir() and (directory / "config.json").exists():
+            config = json.loads((directory / "config.json").read_text(encoding="utf-8"))
+            result.append(
+                {
+                    "id": directory.name,
+                    "name": config["name"],
+                    "mode": config["mode"],
+                    "backend": config["numerics"]["backend"],
+                    **read_status(directory),
+                }
+            )
+    return result
+
+
+@app.get("/api/jobs/{job_id}")
+def get_job(job_id: str):
+    directory = job_dir(job_id)
+    return {
+        "id": job_id,
+        "config": json.loads((directory / "config.json").read_text(encoding="utf-8")),
+        **read_status(directory),
+    }
+
+
+@app.post("/api/jobs/{job_id}/pause")
+def pause(job_id: str):
+    directory = job_dir(job_id)
+    status = read_status(directory)["status"]
+    if status == "queued" and job_id not in WORKERS:
+        atomic_json(directory / "status.json", dict(status="paused", stage="開始前に停止"))
+    elif status == "running" or job_id in WORKERS:
+        (directory / "pause.request").touch()
+    else:
+        raise HTTPException(409, "実行中または待機中のジョブのみ停止できます。")
+    return {"ok": True}
+
+
+@app.post("/api/jobs/{job_id}/resume")
+def resume(job_id: str):
+    directory = job_dir(job_id)
+    if read_status(directory)["status"] not in {"paused", "failed"}:
+        raise HTTPException(409, "停止または失敗したジョブのみ再開できます。")
+    if job_id in WORKERS:
+        raise HTTPException(409, "ワーカー終了処理中です。少し待って再開してください。")
+    (directory / "pause.request").unlink(missing_ok=True)
+    atomic_json(directory / "status.json", dict(status="queued", stage="チェックポイントから再開待ち"))
+    return {"ok": True}
+
+
+@app.get("/api/jobs/{job_id}/results")
+def result(job_id: str, step: int | None = None):
+    path = (
+        job_dir(job_id) / "preview.json"
+        if step is None
+        else job_dir(job_id) / "snapshots" / f"{step:05}.json"
+    )
+    if not path.exists():
+        raise HTTPException(404, "完了した帯電更新の結果がまだありません。")
+    data = json.loads(path.read_text(encoding="utf-8"))
+    # 保存記録は保持し、旧結果の表示にも現在の検証方針を適用する。
+    data["metadata"]["warnings"] = [
+        SPACE_CHARGE_WARNING if warning == "空間電荷を省略。5%感度検証とCOMSOL比較は未実施。" else warning
+        for warning in data["metadata"]["warnings"]
+    ]
+    latest = json.loads((job_dir(job_id) / "preview.json").read_text(encoding="utf-8"))
+    data["saved_times"] = [
+        {"step": h["step"], "time_s": h["time_s"]}
+        for h in latest["history"]
+        if (job_dir(job_id) / "snapshots" / f"{h['step']:05}.json").exists()
+    ]
+    return data
+
+
+@app.get("/api/jobs/{job_id}/export/{kind}")
+def export(job_id: str, kind: str):
+    directory = job_dir(job_id)
+    if kind in {"config", "hdf5", "checkpoint"}:
+        filename = {"config": "config.json", "hdf5": "results.h5", "checkpoint": "checkpoint.h5"}[kind]
+        path = directory / filename
+        if not path.exists():
+            raise HTTPException(404, "出力ファイルがまだありません。")
+        return FileResponse(path, filename=f"{job_id}_{filename}")
+    if kind == "csv":
+        preview = result(job_id)
+        names = preview["metadata"]["collision_labels"]
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        writer.writerow(
+            ["x_nm", "y_nm", "z_nm", "area_m2", "sigma_c_m2", *[n + "_impact_weight" for n in names]]
+        )
+        surf = preview["surface"]
+        for i, point in enumerate(surf["centers_nm"]):
+            writer.writerow(
+                [*point, surf["area_m2"][i], surf["sigma_c_m2"][i], *[v[i] for v in surf["impact_weight"]]]
+            )
+        return Response(
+            "\ufeff" + buf.getvalue(),
+            media_type="text/csv",
+            headers={"Content-Disposition": f'attachment; filename="{job_id}_surface.csv"'},
+        )
+    raise HTTPException(404, "出力形式が不正です。")
+
+
+@app.post("/api/distributions")
+async def import_distribution(
+    file: UploadFile = File(...),
+    config_json: str = Form(...),
+    mass_amu: float = Form(...),
+    pressure_case: str = Form("p0"),
+    projection_policy: str = Form("reject"),
+    collector_min_m: float | None = Form(None),
+    collector_max_m: float | None = Form(None),
+    source_config: UploadFile | None = File(None),
+):
+    config = CaseConfig.model_validate_json(config_json)
+    payload = await file.read(128 * 1024 * 1024 + 1)
+    if len(payload) > 128 * 1024 * 1024:
+        raise ValueError(
+            "入力ファイルは128MB以下にしてください。大きなデータはコレクタ単位に分割してください。"
+        )
+    if (file.filename or "").lower().endswith(".npz"):
+        with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+            if sum(info.file_size for info in archive.infolist()) > 512 * 1024 * 1024:
+                raise ValueError("展開後のNPZが512MBを超えています。")
+    metadata = None
+    if collector_min_m is not None and collector_max_m is not None:
+        if collector_min_m >= collector_max_m:
+            raise ValueError("コレクタ範囲の上下限が不正です。")
+        metadata = {"collector_x_min_m": collector_min_m, "collector_x_max_m": collector_max_m}
+    data, meta = parse_distribution(
+        payload, file.filename or "", config, mass_amu, pressure_case, projection_policy, metadata
+    )
+    jid = uuid.uuid4().hex
+    root = DISTRIBUTIONS / jid
+    np.savez_compressed(
+        root.with_suffix(".npz"), **{k: v if v is not None else np.empty(0) for k, v in data.items()}
+    )
+    if source_config:
+        source = await source_config.read(1024 * 1024 + 1)
+        if len(source) > 1024 * 1024:
+            raise ValueError("上流設定ファイルが大きすぎます。")
+        json.loads(source)
+        import hashlib
+
+        meta["source_config_sha256"] = hashlib.sha256(source).hexdigest()
+        root.with_suffix(".source.json").write_bytes(source)
+    atomic_json(root.with_suffix(".json"), meta)
+    return {"id": jid, "metadata": meta}
+
+
+@app.post("/api/iaedf-case")
+async def import_iaedf_pair(
+    file: UploadFile = File(...),
+    source_config: UploadFile = File(...),
+    config_json: str = Form(...),
+    pressure_case: str = Form("p0"),
+    projection_policy: str = Form("reject"),
+):
+    from .iaedf import case_from_pair
+
+    payload = await file.read(128 * 1024 * 1024 + 1)
+    source = await source_config.read(1024 * 1024 + 1)
+    if len(payload) > 128 * 1024 * 1024 or len(source) > 1024 * 1024:
+        raise ValueError("入力ファイルのサイズ上限を超えています。")
+    with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+        if sum(info.file_size for info in archive.infolist()) > 512 * 1024 * 1024:
+            raise ValueError("展開後のNPZが512MBを超えています。")
+    config = CaseConfig.model_validate_json(config_json)
+    c, data, meta = case_from_pair(
+        payload, source, file.filename or "raw.npz", config, pressure_case, projection_policy
+    )
+    derive(c)
+    sid = uuid.uuid4().hex
+    root = DISTRIBUTIONS / sid
+    np.savez_compressed(
+        root.with_suffix(".npz"), **{k: v if v is not None else np.empty(0) for k, v in data.items()}
+    )
+    root.with_suffix(".source.json").write_bytes(source)
+    atomic_json(root.with_suffix(".json"), meta)
+    c.ions[0].distribution_id = sid
+    return {"config": c.model_dump(), "id": sid, "metadata": meta}
+
+
+class SweepDimension(BaseModel):
+    path: str
+    values: list[float] = Field(min_length=1, max_length=20)
+
+
+class SweepRequest(BaseModel):
+    config: CaseConfig
+    dimensions: list[SweepDimension] = Field(min_length=1, max_length=3)
+
+
+@app.post("/api/sweeps")
+def sweep(request: SweepRequest):
+    if math_product([len(d.values) for d in request.dimensions]) > 64:
+        raise ValueError("1回の掃引は64ケース以内にしてください。")
+    configs = []
+    for values in itertools.product(*(dimension.values for dimension in request.dimensions)):
+        data = request.config.model_dump()
+        for dim, value in zip(request.dimensions, values, strict=True):
+            if not dim.path.startswith("geometry.") or not dim.path.endswith(("_nm", "_deg", "_count")):
+                raise ValueError("掃引には形状寸法・角度・個数を指定してください。")
+            parts = dim.path.split(".")
+            target = data
+            try:
+                for part in parts[:-1]:
+                    target = target[int(part)] if isinstance(target, list) else target[part]
+                if parts[-1] not in target:
+                    raise ValueError("未知の寸法です。")
+                target[parts[-1]] = value
+            except (KeyError, IndexError, TypeError):
+                raise ValueError("掃引パラメーターのパスが不正です。") from None
+        data["name"] = (
+            request.config.name
+            + " · "
+            + ", ".join(
+                f"{d.path.split('.')[-1]}={v:g}" for d, v in zip(request.dimensions, values, strict=True)
+            )
+        )
+        try:
+            c = CaseConfig.model_validate(data)
+        except ValidationError as error:
+            raise ValueError(str(error)) from error
+        derive(c)
+        configs.append(c)
+    return {"ids": [create_job(c) for c in configs]}
+
+
+def math_product(values):
+    import math
+
+    return math.prod(values)
+
+
+static = ROOT / "frontend" / "dist"
+if static.exists():
+    app.mount("/", StaticFiles(directory=static, html=True), name="frontend")

@@ -1,0 +1,32 @@
+const fs = require('node:fs');
+const path = require('node:path');
+const {chromium} = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
+
+(async()=>{
+  const browser = await chromium.launch({headless:true,channel:'msedge'});
+  const page = await browser.newPage({viewport:{width:1440,height:1100},deviceScaleFactor:1});
+  const errors=[];
+  page.on('pageerror',error=>errors.push(error.message));
+  await page.goto('http://127.0.0.1:8765');
+  await page.getByRole('heading',{name:'ホール内輸送・帯電',exact:true}).waitFor();
+  await page.locator('.three-canvas canvas').waitFor();
+  const dir=path.resolve('data/qa');fs.mkdirSync(dir,{recursive:true});
+  await page.screenshot({path:path.join(dir,'settings.png'),fullPage:true});
+  await page.getByRole('button',{name:'上面',exact:true}).click();
+  await page.getByLabel('編集するdummy').selectOption('1');
+  const gap=page.locator('label.number-field').filter({has:page.getByText('個別間隔',{exact:true})}).locator('input');
+  await gap.fill('100');await gap.blur();
+  await page.getByText('360 nm',{exact:true}).waitFor();
+  await page.getByText('50 nm',{exact:true}).waitFor();
+  await page.screenshot({path:path.join(dir,'top_view.png')});
+  const width=await page.evaluate(()=>({scroll:document.documentElement.scrollWidth,viewport:innerWidth}));
+  if(width.scroll>width.viewport)throw new Error('Desktop layout overflow');
+  await page.setViewportSize({width:390,height:844});
+  await page.screenshot({path:path.join(dir,'mobile.png')});
+  const mobileWidth=await page.evaluate(()=>({scroll:document.documentElement.scrollWidth,viewport:innerWidth}));
+  if(mobileWidth.scroll>mobileWidth.viewport)throw new Error('Mobile layout overflow');
+  if(errors.length)throw new Error(errors.join('\n'));
+  fs.writeFileSync(path.join(dir,'ui_check.json'),JSON.stringify({desktop:width,mobile:mobileWidth,errors},null,2));
+  console.log('UI geometry editing, dummy selection, desktop/mobile layouts: passed');
+  await browser.close();
+})().catch(error=>{console.error(error);process.exit(1);});

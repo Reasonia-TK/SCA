@@ -1,0 +1,36 @@
+const fs=require('node:fs');
+const path=require('node:path');
+const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
+
+(async()=>{
+  const browser=await chromium.launch({headless:true,channel:'msedge'});
+  const page=await browser.newPage({viewport:{width:1440,height:1100}});
+  const errors=[];page.on('pageerror',error=>errors.push(error.message));
+  const qa=path.resolve('data/qa');
+  const ids=JSON.parse(fs.readFileSync(path.join(qa,'application_check.json'),'utf8')).job_ids;
+  await page.goto('http://127.0.0.1:8765');
+  await page.locator('.three-canvas canvas').waitFor();
+  await page.screenshot({path:path.join(qa,'settings_ready.png')});
+  await page.getByRole('button',{name:/場と軌道/}).click();
+  await page.getByLabel('結果ジョブ').selectOption(ids[2]);
+  await page.getByRole('heading',{name:'3D場と代表軌道'}).waitFor();
+  await page.getByRole('button',{name:'表面電荷',exact:true}).click();
+  await page.locator('.three-canvas canvas').waitFor();
+  await page.screenshot({path:path.join(qa,'charged_field.png')});
+  await page.locator('.time-select select').selectOption('1');
+  await page.getByText('25 µs',{exact:true}).waitFor();
+  await page.getByRole('button',{name:'電場ベクトル',exact:true}).click();
+  await page.locator('.three-canvas canvas').waitFor();
+  await page.getByRole('button',{name:/衝突統計/}).click();
+  await page.getByRole('heading',{name:'衝突エネルギー・角度'}).waitFor();
+  await page.screenshot({path:path.join(qa,'collision_statistics.png'),fullPage:true});
+  await page.getByRole('button',{name:/比較・精度/}).click();
+  const selectors=page.locator('.compare-selector input');
+  await selectors.nth(1).check();await selectors.nth(2).check();
+  await page.locator('.comparison-table tbody tr').first().waitFor();
+  await page.screenshot({path:path.join(qa,'comparison.png'),fullPage:true});
+  if(errors.length)throw new Error(errors.join('\n'));
+  fs.writeFileSync(path.join(qa,'results_ui_check.json'),JSON.stringify({errors,timeSelection:'passed',fieldVectors:'passed',statistics:'passed',comparison:'passed'},null,2));
+  await browser.close();
+  console.log('Result rendering, saved-time selection, field vectors, spectra and comparison: passed');
+})().catch(error=>{console.error(error);process.exit(1);});

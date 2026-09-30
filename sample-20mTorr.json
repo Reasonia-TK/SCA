@@ -1,0 +1,68 @@
+{
+  "waveform": {
+    "mode": "sinusoid",
+    "waveform_id": null,
+    "delimiter": ",",
+    "skip_header_rows": 1,
+    "x_column": 0,
+    "voltage_column": 1,
+    "x_axis": "time_s",
+    "voltage_scale": 1.0,
+    "voltage_offset_V": 0.0,
+    "phase_offset_deg": 0.0,
+    "sinusoid_dc_V": -170.0,
+    "sinusoid_amplitude_V": 158.0,
+    "sinusoid_phase_offset_deg": 0.0,
+    "wafer_scale": 1.0,
+    "wafer_phase_offset_deg": 0.0,
+    "dc_offset_V": 0.0
+  },
+  "plasma": {
+    "frequency_Hz": 13560000.0,
+    "electron_temperature_eV": 3.0,
+    "sheath_edge_density_m3": 1e+16,
+    "ion_mass_amu": 39.948
+  },
+  "circuit": {
+    "powered_to_grounded_area_ratio": 0.3,
+    "grounded_electrode_voltage_V": 0.0,
+    "phase_points": 2048,
+    "max_cycles": 200,
+    "periodic_tolerance_V": 1e-08,
+    "capacitance_factor": 1.0
+  },
+  "sheath": {
+    "model": "moving_front",
+    "front_width_exponent": 0.75,
+    "potential_exponent": 1.3333333333333333
+  },
+  "gas": {
+    "gas_temperature_K": 300.0,
+    "pressures_mTorr": [
+      10.0
+    ],
+    "cross_section_source": "lxcat_phelps",
+    "xsec_csv_name": "xsec_ar_ion_phelps_lxcat.csv",
+    "elastic_to_cx_ratio": 0.5,
+    "cross_section_scale": 1.0
+  },
+  "tpmc": {
+    "n_particles": 300000,
+    "ion_temperature_eV": 0.05,
+    "steps_per_rf_period": 400,
+    "max_rf_periods": 60.0,
+    "seed": 42,
+    "max_recommended_collision_probability": 0.05
+  },
+  "magnetic": {
+    "bx_T": 0.0,
+    "by_T": 0.0,
+    "bz_T": 0.0
+  },
+  "plot": {
+    "energy_bins": 400,
+    "angle_bins": 900,
+    "angle_step_deg": 0.1,
+    "energy_max_eV": null
+  }
+}
