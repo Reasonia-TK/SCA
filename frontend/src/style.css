@@ -1367,6 +1367,129 @@ footer span {
   font-size: 9px;
   letter-spacing: 0;
 }
+.slice-controls {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  margin-bottom: 15px;
+}
+.slice-controls > label,
+.slice-color-range > label {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  font-size: 11px;
+  color: #60796b;
+}
+.slice-controls input[type="number"],
+.slice-controls select,
+.slice-color-range input {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid #dce5dd;
+  border-radius: 4px;
+  background: #fcfdfc;
+  padding: 9px 10px;
+  color: #3e5647;
+  font: inherit;
+  font-size: 11px;
+}
+.slice-position {
+  grid-column: span 2;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  font-size: 10px;
+  color: #82988a;
+}
+.slice-position input[type="range"] {
+  flex: 1;
+  min-width: 100px;
+}
+.slice-toolbar,
+.slice-color-range {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px;
+  padding: 13px 0;
+  border-top: 1px solid #e4eae0;
+}
+.slice-toolbar label {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  font-size: 11px;
+  color: #60796b;
+}
+.slice-toolbar input {
+  width: 13px;
+  height: 13px;
+}
+.slice-zoom {
+  display: flex;
+  gap: 5px;
+  margin-left: auto;
+  align-items: center;
+  font-size: 11px;
+}
+.slice-zoom button {
+  padding: 7px;
+  border: 1px solid #dce5d8;
+  border-radius: 3px;
+}
+.slice-zoom span {
+  min-width: 25px;
+  text-align: center;
+}
+.slice-color-range > label {
+  width: 130px;
+}
+.slice-export {
+  display: flex;
+  flex-wrap: wrap;
+  margin-left: auto;
+  gap: 8px;
+}
+.slice-canvas-host {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid #e3e9e3;
+  border-radius: 4px;
+  overflow: hidden;
+  background: #fff;
+}
+.slice-canvas-host canvas {
+  display: block;
+  width: 100%;
+  touch-action: none;
+  cursor: crosshair;
+}
+.slice-placeholder {
+  min-height: 350px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 20px;
+  color: #718b7d;
+  font-size: 12px;
+}
+.slice-readout {
+  min-height: 35px;
+  padding: 10px 0;
+  color: #527360;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.slice-error {
+  color: #ae5c44;
+  font-size: 12px;
+  margin: 10px 0;
+}
+.slice-info {
+  padding-bottom: 5px;
+}
 .loading {
   display: flex;
   gap: 13px;
@@ -1477,6 +1600,24 @@ footer span {
   }
 }
 @media (max-width: 690px) {
+  .slice-controls {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .slice-position {
+    grid-column: 1 / -1;
+  }
+  .slice-zoom {
+    margin-left: 0;
+  }
+  .slice-export {
+    margin-left: 0;
+  }
+  .slice-color-range {
+    gap: 10px;
+  }
+  .slice-color-range > label {
+    width: calc(50% - 5px);
+  }
   .sidebar {
     display: none;
   }

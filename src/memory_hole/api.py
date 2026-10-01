@@ -13,9 +13,10 @@ import uuid
 import zipfile
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ValidationError
@@ -24,6 +25,7 @@ from .config import CaseConfig
 from .engine import SPACE_CHARGE_WARNING, atomic_json, gpu_info, run_job
 from .geometry import derive
 from .inlet import parse_distribution
+from .section import saved_section
 from .storage import permission_message, read_json, validate_data_directory
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -347,6 +349,28 @@ def export(job_id: str, kind: str):
             headers={"Content-Disposition": f'attachment; filename="{job_id}_surface.csv"'},
         )
     raise HTTPException(404, "出力形式が不正です。")
+
+
+@app.get("/api/jobs/{job_id}/slice")
+def section(
+    job_id: str,
+    plane: Literal["xy", "xz", "yz", "vertical"] = "xz",
+    position_nm: float = Query(0, allow_inf_nan=False),
+    angle_deg: float = Query(0, ge=-180, le=180, allow_inf_nan=False),
+    resolution: int = Query(241, ge=65, le=401),
+    step: int | None = Query(None, ge=0),
+):
+    try:
+        return saved_section(
+            job_dir(job_id),
+            plane=plane,
+            position_nm=position_nm,
+            angle_deg=angle_deg,
+            resolution=resolution,
+            step=step,
+        )
+    except FileNotFoundError as error:
+        raise HTTPException(404, str(error)) from error
 
 
 @app.post("/api/distributions")

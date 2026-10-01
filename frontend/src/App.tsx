@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import GeometryView from "./GeometryView";
 import ResultAnimation from "./ResultAnimation";
+import SectionPlot from "./SectionPlot";
 
 type Obj = Record<string, any>;
 const labels: Obj = {
@@ -477,18 +478,23 @@ export default function App() {
             </div>
           )}
           <nav className="tabs">
-            {["設定", "実行", "場と軌道", "衝突統計", "比較・精度"].map(
-              (t, i) => (
-                <button
-                  key={t}
-                  className={tab === t ? "active" : ""}
-                  onClick={() => setTab(t)}
-                >
-                  <span>0{i + 1}</span>
-                  {t}
-                </button>
-              ),
-            )}
+            {[
+              "設定",
+              "実行",
+              "場と軌道",
+              "断面2D",
+              "衝突統計",
+              "比較・精度",
+            ].map((t, i) => (
+              <button
+                key={t}
+                className={tab === t ? "active" : ""}
+                onClick={() => setTab(t)}
+              >
+                <span>0{i + 1}</span>
+                {t}
+              </button>
+            ))}
           </nav>
           {tab === "設定" && (
             <>
@@ -1532,7 +1538,7 @@ export default function App() {
               </div>
             </>
           )}
-          {["場と軌道", "衝突統計"].includes(tab) && (
+          {["場と軌道", "断面2D", "衝突統計"].includes(tab) && (
             <>
               <div className="section-header">
                 <h2>{tab}</h2>
@@ -1583,6 +1589,13 @@ export default function App() {
                   <h3>結果を待っています</h3>
                   <p>完了した帯電更新の結果をここに表示します。</p>
                 </div>
+              ) : tab === "断面2D" ? (
+                <SectionPlot
+                  key={job}
+                  jobId={job}
+                  result={result}
+                  config={figConfig}
+                />
               ) : tab === "場と軌道" ? (
                 <div className="results-layout">
                   <Panel
