@@ -32,6 +32,7 @@ const labels: Obj = {
   paused: "停止中",
   completed: "完了",
   failed: "失敗",
+  unavailable: "状態を確認できません",
 };
 const terminationLabels: Obj = {
   saturated: "飽和判定成立（指定許容差内）",

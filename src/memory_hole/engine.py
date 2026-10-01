@@ -4,8 +4,8 @@ import copy
 import hashlib
 import importlib.metadata
 import json
+import logging
 import math
-import os
 import platform
 import time
 from pathlib import Path
@@ -19,15 +19,10 @@ from .field import FieldSolver, build_mesh
 from .geometry import derive
 from .inlet import sample_distribution, verify_metadata
 from .saturation import SaturationMonitor
+from .storage import atomic_json, permission_message, replace_file
 from .transport import AMU, E_CHARGE, ELECTRON_MASS, boundary_maps, sample_generated, trace, wilson_interval
 
 SPACE_CHARGE_WARNING = "空間電荷を省略。5%感度検証は未実施。"
-
-
-def atomic_json(path: Path, value):
-    temporary = path.with_suffix(".tmp")
-    temporary.write_text(json.dumps(value, ensure_ascii=False, allow_nan=False), encoding="utf-8")
-    os.replace(temporary, path)
 
 
 def code_id():
@@ -143,7 +138,7 @@ def save_checkpoint(path, state, sigma, histogram, depth_azimuth, meta):
         h5.create_dataset("sigma_c_m2", data=sigma)
         h5.create_dataset("surface_impact_weight", data=histogram)
         h5.create_dataset("depth_azimuth_weight", data=depth_azimuth)
-    os.replace(temp, path)
+    replace_file(temp, path)
 
 
 def load_checkpoint(path):
@@ -228,7 +223,7 @@ def write_results(
             "statistics/collision_energy_angle_weight", data=state["collision_energy_angle_weight"]
         )
         write_trajectory_data(h5, state["trajectories"], trajectory_fields)
-    os.replace(path, directory / "results.h5")
+    replace_file(path, directory / "results.h5")
     preview = {
         "statistics": summarize_stats(state["stats"]),
         "ledger": state["ledger"],
@@ -278,7 +273,7 @@ def write_results(
             h5.create_dataset("electric_field_v_m", data=field, compression="gzip", compression_opts=1)
             h5.create_dataset("sigma_c_m2", data=sigma, compression="gzip", compression_opts=1)
             write_trajectory_data(h5, state["trajectories"], trajectory_fields)
-        os.replace(snapshots / f"{state['step']:05}.tmp.h5", snapshots / f"{state['step']:05}.h5")
+        replace_file(snapshots / f"{state['step']:05}.tmp.h5", snapshots / f"{state['step']:05}.h5")
 
 
 def combine_time_series(directory):
@@ -296,11 +291,32 @@ def combine_time_series(directory):
                 target.attrs["time_s"] = snapshot.attrs["time_s"]
                 for key in snapshot:
                     snapshot.copy(key, target)
-    os.replace(temporary, directory / "results.h5")
+    replace_file(temporary, directory / "results.h5")
 
 
 class Paused(Exception):
     pass
+
+
+def report_failure(directory, error, progress):
+    # Details remain local to the job; no credentials or input payload are logged.
+    import traceback
+
+    details = traceback.format_exc()
+    try:
+        (directory / "error.log").write_text(details, encoding="utf-8")
+    except OSError:
+        logging.getLogger(__name__).error(
+            "ジョブ %s のエラーログを保存できません。\n%s", directory.name, details
+        )
+    stage = permission_message(error, directory) if isinstance(error, PermissionError) else str(error)
+    try:
+        progress("failed", stage, error_type=type(error).__name__)
+    except OSError as status_error:
+        logging.getLogger(__name__).error(
+            "ジョブ %s の失敗状態を保存できません。\n%s", directory.name, details
+        )
+        raise error from status_error
 
 
 def run_job(directory: str, distribution_root: str):
@@ -870,16 +886,15 @@ def run_job(directory: str, distribution_root: str):
             saturation=monitor.summary() if monitor else None,
         )
     except Paused:
-        progress(
-            "paused",
-            "保存済みの帯電更新点で停止（途中のバッチは再開時に再計算）",
-            time_s=state["time_s"],
-            step=state["step"],
-            saturation=state.get("saturation"),
-        )
+        try:
+            progress(
+                "paused",
+                "保存済みの帯電更新点で停止（途中のバッチは再開時に再計算）",
+                time_s=state["time_s"],
+                step=state["step"],
+                saturation=state.get("saturation"),
+            )
+        except OSError as error:
+            report_failure(directory, error, progress)
     except Exception as error:
-        progress("failed", str(error), error_type=type(error).__name__)
-        # Details remain local to the job; no credentials or input payload are logged.
-        import traceback
-
-        (directory / "error.log").write_text(traceback.format_exc(), encoding="utf-8")
+        report_failure(directory, error, progress)

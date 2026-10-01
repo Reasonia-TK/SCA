@@ -181,7 +181,8 @@ button svg {
   background: #ebba65;
   box-shadow: 0 0 0 3px #e4b94e1f;
 }
-.status-dot.failed {
+.status-dot.failed,
+.status-dot.unavailable {
   background: #e39186;
 }
 .sidebar-footer {
@@ -974,7 +975,8 @@ summary {
   color: #a8883f;
   border-color: #e9dbb3;
 }
-.status-label.failed {
+.status-label.failed,
+.status-label.unavailable {
   background: #fbeeea;
   color: #b5705b;
   border-color: #e8c6b9;
@@ -985,6 +987,7 @@ summary {
   border-color: #e9dbb3;
 }
 .job-card p {
+  overflow-wrap: anywhere;
   font-size: 10px;
   color: #95a38e;
   margin-top: 12px;

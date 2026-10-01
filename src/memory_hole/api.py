@@ -5,12 +5,13 @@ import csv
 import io
 import itertools
 import json
+import logging
 import multiprocessing
 import os
 import time
 import uuid
 import zipfile
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
 import numpy as np
@@ -23,12 +24,15 @@ from .config import CaseConfig
 from .engine import SPACE_CHARGE_WARNING, atomic_json, gpu_info, run_job
 from .geometry import derive
 from .inlet import parse_distribution
+from .storage import permission_message, read_json, validate_data_directory
 
 ROOT = Path(__file__).resolve().parents[2]
 DATA = Path(os.environ.get("MEMORY_HOLE_DATA", str(ROOT / "data"))).resolve()
 JOBS = DATA / "jobs"
 DISTRIBUTIONS = DATA / "distributions"
 WORKERS = {}
+STARTUP_JOBS = set()
+logger = logging.getLogger(__name__)
 
 
 def job_dir(job_id):
@@ -39,53 +43,113 @@ def job_dir(job_id):
 
 def read_status(directory):
     try:
-        return json.loads((directory / "status.json").read_text(encoding="utf-8"))
+        return read_json(directory / "status.json")
+    except PermissionError as error:
+        return {"status": "unavailable", "stage": permission_message(error, directory / "status.json")}
     except (FileNotFoundError, json.JSONDecodeError):
-        return {"status": "queued", "stage": "待機中"}
+        return {
+            "status": "unavailable",
+            "stage": "status.jsonが存在しないか、内容を読み取れません。保存先の状態を確認してください。",
+        }
+
+
+def scheduler_tick(warned):
+    for jid in list(STARTUP_JOBS):
+        directory = JOBS / jid
+        status = read_status(directory)
+        if status["status"] == "unavailable":
+            if jid not in warned:
+                logger.warning("ジョブ %s の起動時の状態を確認できません: %s", jid, status["stage"])
+                warned.add(jid)
+            continue
+        if status["status"] == "running":
+            try:
+                atomic_json(
+                    directory / "status.json",
+                    dict(status="paused", stage="前回終了時のチェックポイントから再開可能"),
+                )
+            except OSError as error:
+                if jid not in warned:
+                    logger.warning("ジョブ %s の停止状態を保存できません: %s", jid, error)
+                    warned.add(jid)
+                continue
+        STARTUP_JOBS.discard(jid)
+        warned.discard(jid)
+    for jid, proc in list(WORKERS.items()):
+        if proc.is_alive():
+            continue
+        proc.join()
+        directory = JOBS / jid
+        try:
+            status = read_status(directory)
+            if status["status"] == "unavailable":
+                if jid not in warned:
+                    logger.warning("ジョブ %s の終了状態を確認できません: %s", jid, status["stage"])
+                    warned.add(jid)
+                continue
+            if status["status"] in {"running", "queued"}:
+                atomic_json(
+                    directory / "status.json",
+                    dict(
+                        status="failed",
+                        stage="ワーカープロセスが終了しました。error.logまたはserver.error.logを確認してください。"
+                        "保存済みのチェックポイントから再開できます。",
+                    ),
+                )
+        except OSError as error:
+            if jid not in warned:
+                logger.warning("ジョブ %s の終了状態を保存できません: %s", jid, error)
+                warned.add(jid)
+            continue
+        del WORKERS[jid]
+        warned.discard(jid)
+    # A dead worker waiting for storage recovery must not block other queued jobs.
+    if not any(proc.is_alive() for proc in WORKERS.values()):
+        for directory in sorted(JOBS.iterdir(), key=lambda p: p.stat().st_mtime):
+            if (
+                directory.is_dir()
+                and directory.name not in WORKERS
+                and directory.name not in STARTUP_JOBS
+                and read_status(directory)["status"] == "queued"
+            ):
+                proc = multiprocessing.get_context("spawn").Process(
+                    target=run_job, args=(str(directory), str(DISTRIBUTIONS))
+                )
+                proc.start()
+                WORKERS[directory.name] = proc
+                break
 
 
 async def scheduler():
+    warned = set()
+    last_error = None
     while True:
-        for jid, proc in list(WORKERS.items()):
-            if not proc.is_alive():
-                proc.join()
-                del WORKERS[jid]
-                directory = JOBS / jid
-                if read_status(directory)["status"] == "running":
-                    atomic_json(
-                        directory / "status.json",
-                        dict(
-                            status="failed",
-                            stage="ワーカープロセスが終了しました。チェックポイントから再開できます。",
-                        ),
-                    )
-        if not WORKERS:
-            for directory in sorted(JOBS.iterdir(), key=lambda p: p.stat().st_mtime):
-                if directory.is_dir() and read_status(directory)["status"] == "queued":
-                    proc = multiprocessing.get_context("spawn").Process(
-                        target=run_job, args=(str(directory), str(DISTRIBUTIONS))
-                    )
-                    proc.start()
-                    WORKERS[directory.name] = proc
-                    break
+        try:
+            scheduler_tick(warned)
+            last_error = None
+        except OSError as error:
+            if str(error) != last_error:
+                logger.warning("保存先にアクセスできません。再試行します: %s", error)
+                last_error = str(error)
         await asyncio.sleep(0.3)
 
 
 @asynccontextmanager
 async def lifespan(app):
-    JOBS.mkdir(parents=True, exist_ok=True)
-    DISTRIBUTIONS.mkdir(parents=True, exist_ok=True)
-    for directory in JOBS.iterdir():
-        if directory.is_dir() and read_status(directory)["status"] == "running":
-            atomic_json(
-                directory / "status.json",
-                dict(status="paused", stage="前回終了時のチェックポイントから再開可能"),
-            )
+    for directory in (DATA, JOBS, DISTRIBUTIONS):
+        validate_data_directory(directory)
+    STARTUP_JOBS.clear()
+    STARTUP_JOBS.update(directory.name for directory in JOBS.iterdir() if directory.is_dir())
     task = asyncio.create_task(scheduler())
     yield
     task.cancel()
+    with suppress(asyncio.CancelledError):
+        await task
     for jid in WORKERS:
-        (JOBS / jid / "pause.request").touch()
+        try:
+            (JOBS / jid / "pause.request").touch()
+        except OSError as error:
+            logger.warning("ジョブ %s の停止要求を保存できません: %s", jid, error)
     for proc in WORKERS.values():
         await asyncio.to_thread(proc.join, 5)
     WORKERS.clear()
@@ -120,6 +184,11 @@ async def value_error(request, exc):
     return JSONResponse(status_code=400, content={"detail": str(exc)})
 
 
+@app.exception_handler(PermissionError)
+async def permission_error(request, exc):
+    return JSONResponse(status_code=403, content={"detail": permission_message(exc, DATA)})
+
+
 @app.get("/api/defaults")
 def defaults():
     preset = DATA / "preset.json"
@@ -133,7 +202,12 @@ def defaults():
 
 @app.get("/api/system")
 def system():
-    return {"gpu": gpu_info(), "active_workers": len(WORKERS), "app_version": "0.1.0"}
+    return {
+        "gpu": gpu_info(),
+        "active_workers": sum(proc.is_alive() for proc in WORKERS.values()),
+        "app_version": "0.1.0",
+        "data_dir": str(DATA),
+    }
 
 
 @app.post("/api/geometry")
