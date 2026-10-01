@@ -27,6 +27,7 @@ from .geometry import derive
 from .inlet import parse_distribution
 from .section import saved_section
 from .storage import permission_message, read_json, validate_data_directory
+from .upstream_api import UpstreamService
 
 ROOT = Path(__file__).resolve().parents[2]
 DATA = Path(os.environ.get("MEMORY_HOLE_DATA", str(ROOT / "data"))).resolve()
@@ -53,6 +54,9 @@ def read_status(directory):
             "status": "unavailable",
             "stage": "status.jsonが存在しないか、内容を読み取れません。保存先の状態を確認してください。",
         }
+
+
+UPSTREAM = UpstreamService(DATA, DISTRIBUTIONS, read_status)
 
 
 def scheduler_tick(warned):
@@ -106,7 +110,7 @@ def scheduler_tick(warned):
         del WORKERS[jid]
         warned.discard(jid)
     # A dead worker waiting for storage recovery must not block other queued jobs.
-    if not any(proc.is_alive() for proc in WORKERS.values()):
+    if not any(proc.is_alive() for proc in WORKERS.values()) and not UPSTREAM.active():
         for directory in sorted(JOBS.iterdir(), key=lambda p: p.stat().st_mtime):
             if (
                 directory.is_dir()
@@ -128,6 +132,7 @@ async def scheduler():
     while True:
         try:
             scheduler_tick(warned)
+            UPSTREAM.tick(can_launch=not any(proc.is_alive() for proc in WORKERS.values()))
             last_error = None
         except OSError as error:
             if str(error) != last_error:
@@ -142,6 +147,7 @@ async def lifespan(app):
         validate_data_directory(directory)
     STARTUP_JOBS.clear()
     STARTUP_JOBS.update(directory.name for directory in JOBS.iterdir() if directory.is_dir())
+    UPSTREAM.start()
     task = asyncio.create_task(scheduler())
     yield
     task.cancel()
@@ -155,9 +161,11 @@ async def lifespan(app):
     for proc in WORKERS.values():
         await asyncio.to_thread(proc.join, 5)
     WORKERS.clear()
+    await asyncio.to_thread(UPSTREAM.shutdown)
 
 
 app = FastAPI(title="Memory Hole Simulator", lifespan=lifespan)
+app.include_router(UPSTREAM.router)
 
 
 @app.middleware("http")
@@ -206,7 +214,8 @@ def defaults():
 def system():
     return {
         "gpu": gpu_info(),
-        "active_workers": sum(proc.is_alive() for proc in WORKERS.values()),
+        "active_workers": sum(proc.is_alive() for proc in WORKERS.values())
+        + sum(proc.is_alive() for proc in UPSTREAM.workers.values()),
         "app_version": "0.1.0",
         "data_dir": str(DATA),
     }

@@ -33,6 +33,7 @@ packages = ["src/memory_hole"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = ["slow: IAEDF notebook parity with the original particle count"]
 
 [tool.ruff]
 line-length = 110

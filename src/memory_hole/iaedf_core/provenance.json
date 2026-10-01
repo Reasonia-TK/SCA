@@ -1,0 +1,95 @@
+{
+  "source_project": "IAEDF-Sim",
+  "imported_on": "2026-10-01",
+  "source_revision": "Local source snapshot (no Git metadata)",
+  "files": [
+    {
+      "path": "backend/bkmcore/__init__.py",
+      "sha256": "fd4bc811fecefc33a7797a173e56e33f672d80fb96c429b9a94e50e538c39eb2"
+    },
+    {
+      "path": "backend/bkmcore/constants.py",
+      "sha256": "cce95cd3a37f7f9441ef014d042b6f3385cebf7bdb1925a002d213286662263d"
+    },
+    {
+      "path": "backend/bkmcore/mc_utils.py",
+      "sha256": "2f2c62cb83d20d4dff090aa896daf7c56a608bf4213f92a0ef57375c1bb88a99"
+    },
+    {
+      "path": "backend/bkmcore/plasma.py",
+      "sha256": "29abd1bf343f43cae5af926b17c5fbcf05f82a87dbff7e07129e367bda30959f"
+    },
+    {
+      "path": "backend/bkmcore/report.py",
+      "sha256": "8e95822426202cf8263ce2d3b34efc4fefa546143a6748e1567832cc18dfd97e"
+    },
+    {
+      "path": "backend/bkmcore/schemas.py",
+      "sha256": "b4b4fe903c3f9267e2b8a21f51960e8ad825aa4174dfaa92249884603669ee7e"
+    },
+    {
+      "path": "backend/bkmcore/waveform.py",
+      "sha256": "14f5fff4d4cc0c9a485bb8b98556870a33fd944346b5086d71074b321d57605e"
+    },
+    {
+      "path": "backend/bkmcore/xsec.py",
+      "sha256": "8cbbba1356bcaff6030eb1a7ec524e972ab62078d0c2d9536b58ddfd6485086b"
+    },
+    {
+      "path": "backend/bkmcore/model1d/__init__.py",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "backend/bkmcore/model1d/circuit.py",
+      "sha256": "fb6c8563230846b66eb1e29dbeae5b37fa6b8795030412fb7c91e01236d6fd37"
+    },
+    {
+      "path": "backend/bkmcore/model1d/runner.py",
+      "sha256": "9739f2b782a88bcf4157f5795d3cffab1ef019cd257c4b39b945a36ca4a4da82"
+    },
+    {
+      "path": "backend/bkmcore/model1d/tpmc.py",
+      "sha256": "d18e0cadbbca8ec2aa1cbdfb9e72b125ce52349d22ab2ca07150946d1b28eee1"
+    },
+    {
+      "path": "backend/bkmcore/model2d/__init__.py",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "backend/bkmcore/model2d/analysis.py",
+      "sha256": "d5eb25cbe8f24e20d784335cc678bd551ecbeae2571490d50ee964223d2a45df"
+    },
+    {
+      "path": "backend/bkmcore/model2d/circuit.py",
+      "sha256": "31ecdffcd846720538de31e91946bf919c01197f1cdbf0022ad1b91fd4d4f094"
+    },
+    {
+      "path": "backend/bkmcore/model2d/field.py",
+      "sha256": "73d255f92eb490039a89812dff56753a8e08a40d854f3ba6ba315f9cd095d73d"
+    },
+    {
+      "path": "backend/bkmcore/model2d/runner.py",
+      "sha256": "9c0fe02d08a103f83a5c2799d80f89280548457e50bbbb6fd91e8a5520d1ee08"
+    },
+    {
+      "path": "backend/bkmcore/model2d/space_charge.py",
+      "sha256": "5ea8b6b9fcebc8d1dbafd85187f2890e8362a64b3a6d1e1bb24f80bcdbae8092"
+    },
+    {
+      "path": "backend/bkmcore/model2d/tpmc.py",
+      "sha256": "a42fc8165ae15f455c67ceef20fa61879ba66a9a6ac3274894fdafcc7bc6ca7a"
+    },
+    {
+      "path": "data/xsec_ar_ion_phelps_lxcat.csv",
+      "sha256": "1e8c884118195472cc5c8d9fc0072265200b48d78f8bb97881648e3f3638d66a"
+    },
+    {
+      "path": "data/xsec_he_ion_phelps_lxcat.csv",
+      "sha256": "eb0ec7679990b84661da99483290f74f531dd8a7a08048c07fdd2124169f613d"
+    },
+    {
+      "path": "data/tailored_waveform_5harmonic.csv",
+      "sha256": "9891eeaee1c19da235287f4fd5286bfda34cf8fe62b269a3327d7e6e1340180d"
+    }
+  ]
+}

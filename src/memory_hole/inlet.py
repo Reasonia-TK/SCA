@@ -19,9 +19,13 @@ MAX_SAMPLES = 2_000_000
 
 def waveform_id(config: CaseConfig):
     w = config.waveform
-    return hashlib.sha256(
-        json.dumps([w.dc_v, w.amplitude_v, w.frequency_hz, w.phase_origin_deg]).encode()
-    ).hexdigest()
+    values = [w.dc_v, w.amplitude_v, w.frequency_hz, w.phase_origin_deg]
+    if w.samples:
+        # JSON/Pydantic can turn default integer zero into float zero on reload.
+        # Canonicalize the new arbitrary-waveform contract, preserving legacy IDs.
+        values = [float(v) for v in values]
+        values.append([[p.phase_deg, p.potential_v] for p in w.samples])
+    return hashlib.sha256(json.dumps(values).encode()).hexdigest()
 
 
 def parse_distribution(

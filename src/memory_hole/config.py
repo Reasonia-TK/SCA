@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+from bisect import bisect_right
 from itertools import pairwise
 from typing import Literal
 
@@ -58,14 +59,37 @@ class Geometry(InputModel):
     mesh_growth: float = Field(default=1.4, gt=1, le=3)
 
 
+class WaveformSample(InputModel):
+    phase_deg: float = Field(ge=0, lt=360)
+    potential_v: float
+
+
 class Waveform(InputModel):
     dc_v: float = 0
     amplitude_v: float = Field(default=0, ge=0)
     frequency_hz: float = Field(default=13.56e6, gt=0)
     phase_origin_deg: float = 0
     source: str = "検証用仮値"
+    samples: list[WaveformSample] = Field(default_factory=list, max_length=20000)
+
+    @model_validator(mode="after")
+    def validate_samples(self):
+        phases = [p.phase_deg for p in self.samples]
+        if phases and (len(phases) < 4 or any(b <= a for a, b in pairwise(phases))):
+            raise ValueError("任意波形は位相が昇順で重複しない4点以上の周期データにしてください。")
+        return self
 
     def voltage(self, phase_deg: float) -> float:
+        if self.samples:
+            phase = phase_deg % 360
+            i = bisect_right(self.samples, phase, key=lambda p: p.phase_deg)
+            left, right = self.samples[i - 1], self.samples[i % len(self.samples)]
+            x0, x1 = left.phase_deg, right.phase_deg
+            if i == 0:
+                x0 -= 360
+            elif i == len(self.samples):
+                x1 += 360
+            return left.potential_v + (right.potential_v - left.potential_v) * (phase - x0) / (x1 - x0)
         return self.dc_v + self.amplitude_v * math.sin(math.radians(phase_deg + self.phase_origin_deg))
 
 

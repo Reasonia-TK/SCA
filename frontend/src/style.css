@@ -6,6 +6,185 @@
   font-size: 13px;
   font-weight: 400;
 }
+.waveform-fields {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+.waveform-fields:disabled {
+  opacity: 0.55;
+}
+.iaedf-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  margin: 22px 0;
+}
+.iaedf-heading h2 {
+  font-size: 21px;
+  margin-bottom: 7px;
+}
+.iaedf-heading p {
+  color: #74847e;
+}
+.iaedf-layout {
+  display: grid;
+  grid-template-columns: minmax(330px, 1fr) minmax(360px, 1.3fr);
+  gap: 22px;
+  align-items: start;
+}
+.iaedf-settings,
+.iaedf-results {
+  display: grid;
+  gap: 18px;
+  min-width: 0;
+}
+.iaedf-workspace .form-label {
+  margin: 10px 0;
+}
+.iaedf-workspace textarea {
+  width: 100%;
+  resize: vertical;
+  border: 1px solid #d5e1d8;
+  border-radius: 7px;
+  padding: 9px;
+  font-family: Consolas, monospace;
+  font-size: 11px;
+  margin: 10px 0;
+}
+.iaedf-workspace summary {
+  cursor: pointer;
+  padding: 12px 0;
+}
+.iaedf-workspace pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 11px;
+}
+.iaedf-workspace .hint {
+  font-size: 11px;
+  line-height: 1.7;
+  color: #74847e;
+  margin: 10px 0;
+}
+.iaedf-actions {
+  display: flex;
+  gap: 9px;
+  flex-wrap: wrap;
+  margin: 14px 0 8px;
+}
+.iaedf-upload {
+  cursor: pointer;
+}
+.iaedf-upload input {
+  max-width: 180px;
+  font-size: 11px;
+}
+.iaedf-status {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0;
+}
+.iaedf-workspace progress {
+  width: 100%;
+  height: 8px;
+  accent-color: #26705e;
+}
+.iaedf-metrics {
+  display: flex;
+  gap: 20px;
+  flex-wrap: wrap;
+  margin: 20px 0;
+}
+.iaedf-metrics span {
+  display: grid;
+  gap: 8px;
+  font-size: 11px;
+  color: #74847e;
+}
+.iaedf-metrics b {
+  font-size: 16px;
+  color: #223d36;
+}
+.iaedf-chart {
+  display: block;
+  width: 100%;
+}
+.iaedf-chart text,
+.iaedf-geometry text {
+  font:
+    11px "Segoe UI",
+    sans-serif;
+  fill: #74847e;
+}
+.iaedf-geometry {
+  width: 100%;
+  background: #f7faf7;
+  border-radius: 8px;
+  margin: 10px 0;
+}
+.iaedf-point {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1.1fr;
+  gap: 7px;
+  margin: 7px 0;
+  align-items: center;
+  font-size: 11px;
+}
+.iaedf-point input,
+.iaedf-point select {
+  min-width: 0;
+  width: 100%;
+  padding: 7px;
+  border: 1px solid #d5e1d8;
+  border-radius: 5px;
+}
+.iaedf-joint {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  gap: 10px;
+  margin: 15px 0;
+}
+.iaedf-joint canvas {
+  width: 100%;
+  height: 260px;
+  border: 1px solid #d5e1d8;
+  image-rendering: pixelated;
+}
+.iaedf-joint-y {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding-bottom: 45px;
+  font-size: 10px;
+  color: #74847e;
+}
+.iaedf-axis {
+  display: flex;
+  justify-content: space-between;
+  color: #74847e;
+  font-size: 11px;
+  margin: 5px 0;
+}
+.iaedf-joint p {
+  font-size: 11px;
+  color: #74847e;
+  text-align: center;
+}
+.iaedf-workspace li {
+  margin: 12px 0;
+  line-height: 1.7;
+}
+@media (max-width: 1100px) {
+  .iaedf-layout {
+    grid-template-columns: 1fr;
+  }
+  .iaedf-heading {
+    flex-wrap: wrap;
+  }
+}
 * {
   box-sizing: border-box;
 }

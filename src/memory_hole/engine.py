@@ -27,7 +27,7 @@ SPACE_CHARGE_WARNING = "空間電荷を省略。5%感度検証は未実施。"
 
 def code_id():
     digest = hashlib.sha256()
-    for path in sorted(Path(__file__).parent.glob("*.py")):
+    for path in sorted(Path(__file__).parent.rglob("*.py")):
         digest.update(path.read_bytes())
     return digest.hexdigest()
 

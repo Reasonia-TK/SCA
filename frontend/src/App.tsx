@@ -22,6 +22,7 @@ import {
 import GeometryView from "./GeometryView";
 import ResultAnimation from "./ResultAnimation";
 import SectionPlot from "./SectionPlot";
+import IAEDFPanel from "./IAEDFPanel";
 
 type Obj = Record<string, any>;
 const labels: Obj = {
@@ -456,7 +457,7 @@ export default function App() {
             <strong>検証用ケース</strong>
             <span>
               {config.ions.some((s: any) => s.distribution_id)
-                ? "IAEDF分布を使用。面外速度・絶対流束の近似と、実デバイスの予測精度は未検証です。"
+                ? "IAEDF分布を使用。絶対流束のモデル推定と、実デバイスの予測精度は未検証です。"
                 : "入口分布・流束・波形は仮値です。実デバイスの予測精度は未検証です。"}
             </span>
             <span className="pill">3D / 全周360°</span>
@@ -480,6 +481,7 @@ export default function App() {
           <nav className="tabs">
             {[
               "設定",
+              "IAEDF",
               "実行",
               "場と軌道",
               "断面2D",
@@ -496,6 +498,20 @@ export default function App() {
               </button>
             ))}
           </nav>
+          <div hidden={tab !== "IAEDF"}>
+            <IAEDFPanel
+              active={tab === "IAEDF"}
+              holeConfig={config}
+              onApply={(v) => {
+                setConfig(v.config);
+                setSpeciesIndex(0);
+                setNotice(
+                  `${v.metadata.sample_count}粒子のIAEDFを入口へ適用しました。 ${v.metadata.warnings.join(" ")}`,
+                );
+                setTab("設定");
+              }}
+            />
+          </div>
           {tab === "設定" && (
             <>
               <div className="case-title">
@@ -902,39 +918,59 @@ export default function App() {
                     )}
                   </Panel>
                   <Panel title="ウェハ電位" tag="IAEDFと共通">
-                    <div className="fields two">
-                      <NumberField
-                        label="DC電位"
-                        value={config.waveform.dc_v}
-                        onChange={(v: number) => update("waveform.dc_v", v)}
-                        unit="V"
-                      />
-                      <NumberField
-                        label="RF振幅"
-                        value={config.waveform.amplitude_v}
-                        onChange={(v: number) =>
-                          update("waveform.amplitude_v", v)
-                        }
-                        unit="V"
-                      />
-                      <NumberField
-                        label="周波数"
-                        value={config.waveform.frequency_hz / 1e6}
-                        onChange={(v: number) =>
-                          update("waveform.frequency_hz", v * 1e6)
-                        }
-                        unit="MHz"
-                        step={0.01}
-                      />
-                      <NumberField
-                        label="位相原点"
-                        value={config.waveform.phase_origin_deg}
-                        onChange={(v: number) =>
-                          update("waveform.phase_origin_deg", v)
-                        }
-                        unit="°"
-                      />
-                    </div>
+                    {config.waveform.samples?.length ? (
+                      <div className="note">
+                        <Waves size={17} />
+                        <span>
+                          IAEDFの任意波形 {config.waveform.samples.length}
+                          点を周期補間して使用します。
+                        </span>
+                        <button
+                          className="secondary"
+                          onClick={() => update("waveform.samples", [])}
+                        >
+                          正弦波へ変更
+                        </button>
+                      </div>
+                    ) : null}
+                    <fieldset
+                      className="waveform-fields"
+                      disabled={!!config.waveform.samples?.length}
+                    >
+                      <div className="fields two">
+                        <NumberField
+                          label="DC電位"
+                          value={config.waveform.dc_v}
+                          onChange={(v: number) => update("waveform.dc_v", v)}
+                          unit="V"
+                        />
+                        <NumberField
+                          label="RF振幅"
+                          value={config.waveform.amplitude_v}
+                          onChange={(v: number) =>
+                            update("waveform.amplitude_v", v)
+                          }
+                          unit="V"
+                        />
+                        <NumberField
+                          label="周波数"
+                          value={config.waveform.frequency_hz / 1e6}
+                          onChange={(v: number) =>
+                            update("waveform.frequency_hz", v * 1e6)
+                          }
+                          unit="MHz"
+                          step={0.01}
+                        />
+                        <NumberField
+                          label="位相原点"
+                          value={config.waveform.phase_origin_deg}
+                          onChange={(v: number) =>
+                            update("waveform.phase_origin_deg", v)
+                          }
+                          unit="°"
+                        />
+                      </div>
+                    </fieldset>
                     <div className="note">
                       <Waves size={17} />
                       <span>
