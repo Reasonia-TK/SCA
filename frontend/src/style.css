@@ -386,6 +386,9 @@ h1 {
   grid-template-columns: minmax(310px, 1fr) minmax(400px, 1.23fr);
   gap: 22px;
 }
+.settings-layout > * {
+  min-width: 0;
+}
 .panel {
   border: 1px solid #dfe6e0;
   background: #fff;
@@ -976,6 +979,11 @@ summary {
   color: #b5705b;
   border-color: #e8c6b9;
 }
+.status-label.limited {
+  background: #fbf6e6;
+  color: #a8883f;
+  border-color: #e9dbb3;
+}
 .job-card p {
   font-size: 10px;
   color: #95a38e;
@@ -995,6 +1003,7 @@ summary {
 }
 .job-metadata {
   display: flex;
+  flex-wrap: wrap;
   gap: 17px;
   font:
     10px Consolas,

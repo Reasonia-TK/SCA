@@ -18,6 +18,7 @@ from .config import CaseConfig
 from .field import FieldSolver, build_mesh
 from .geometry import derive
 from .inlet import sample_distribution, verify_metadata
+from .saturation import SaturationMonitor
 from .transport import AMU, E_CHARGE, ELECTRON_MASS, boundary_maps, sample_generated, trace, wilson_interval
 
 SPACE_CHARGE_WARNING = "空間電荷を省略。5%感度検証は未実施。"
@@ -76,6 +77,7 @@ def provenance(config, derived, distributions):
         "gpu": gpu_info(),
         "input_files": [meta for _, meta in distributions.values()],
         "units": {"length": "m", "energy": "eV", "charge": "C", "time": "s"},
+        "run_until": config.numerics.run_until,
         "wafer_capacitance_role": "記録のみ。局所電流からウェハ電位を再計算しない。",
     }
 
@@ -106,6 +108,7 @@ def new_ledger():
         conductor_c=0.0,
         deposited_oxide_c=0.0,
         unresolved_c=0.0,
+        unresolved_absolute_c=0.0,
         emitted_c=0.0,
         leaked_c=0.0,
     )
@@ -243,6 +246,9 @@ def write_results(
         },
         "depth_azimuth_weight": depth_azimuth.tolist(),
         "time_s": state["time_s"],
+        "run_until": meta.get("run_until", "time"),
+        "termination_reason": state.get("termination_reason"),
+        "saturation": state.get("saturation"),
     }
     preview["collision_energy_angle_weight"] = state["collision_energy_angle_weight"]
     preview["asymmetry"] = {}
@@ -388,9 +394,25 @@ def run_job(directory: str, distribution_root: str):
                     "設定・メッシュ・コード版が変わったチェックポイントは同一計算として再開できません。"
                 )
             rng.bit_generator.state = state["rng"]
+        saturation_mode = config.numerics.run_until == "saturation"
+        criteria = config.numerics.saturation
+        time_limit = criteria.max_time_s if saturation_mode else config.numerics.duration_s
+        update_limit = criteria.max_updates if saturation_mode else 10000
+        monitor = None
+        if saturation_mode:
+            restored = state.get("saturation_state")
+            reference_sigma = np.array(restored["reference_sigma_c_m2"]) if restored else sigma
+            reference_phi, _, _ = solver.solve(reference_sigma, config.waveform.voltage(0))
+            monitor = SaturationMonitor(
+                criteria, state["time_s"], reference_sigma, reference_phi, mesh.surface_area, restored
+            )
+            state["saturation_state"] = monitor.state
+            state["saturation"] = monitor.summary()
         save_checkpoint(checkpoint, state, sigma, histogram, depth_azimuth, metadata)
         nominal_dt = (
-            config.numerics.duration_s / config.numerics.charging_steps
+            criteria.window_s / criteria.steps_per_window
+            if saturation_mode
+            else config.numerics.duration_s / config.numerics.charging_steps
             if config.mode == "self_consistent"
             else config.numerics.duration_s
         )
@@ -399,11 +421,13 @@ def run_job(directory: str, distribution_root: str):
             from .gpu import GPUTracer
 
             transport_function = GPUTracer(mesh, face_kind, face_patch)
-        while state["time_s"] < config.numerics.duration_s * (1 - 1e-12):
-            if state["step"] >= 10000:
+        while state["time_s"] < time_limit * (1 - 1e-12) and not state.get("termination_reason"):
+            if state["step"] >= update_limit:
                 raise RuntimeError("帯電更新が10000回を超えました。時間・許容電位変化を見直してください。")
             rng_before = copy.deepcopy(rng.bit_generator.state)
-            physical_dt = min(nominal_dt, config.numerics.duration_s - state["time_s"])
+            physical_dt = min(nominal_dt, time_limit - state["time_s"])
+            if monitor:
+                physical_dt = min(physical_dt, monitor.remaining_window_s(state["time_s"]))
             step_stats = {name: new_stats() for name in names}
             ledger = new_ledger()
             deposited = np.zeros(len(sigma))
@@ -618,6 +642,9 @@ def run_job(directory: str, distribution_root: str):
                             ledger["unresolved_c"] += float(
                                 np.dot(active_q[status == 3], active_weight[status == 3])
                             )
+                            ledger["unresolved_absolute_c"] += float(
+                                np.dot(np.abs(active_q[status == 3]), active_weight[status == 3])
+                            )
                             ledger["emitted_c"] -= E_CHARGE * float(active_weight[emitted].sum())
                             continuing = reflect_e | neutral
                             finished_original = original & ~continuing
@@ -672,6 +699,7 @@ def run_job(directory: str, distribution_root: str):
                             flight = np.r_[flight[continuing], flight[emitted]]
                         else:
                             ledger["unresolved_c"] += float(np.dot(active_q, active_weight))
+                            ledger["unresolved_absolute_c"] += float(np.dot(np.abs(active_q), active_weight))
                             step_stats[name]["unresolved_weight"] += float(active_weight[original].sum())
                     done += count
                     progress(
@@ -681,9 +709,12 @@ def run_job(directory: str, distribution_root: str):
                         time_s=state["time_s"],
                         progress=min(
                             0.99,
-                            (state["time_s"] + physical_dt * done / total_samples)
-                            / config.numerics.duration_s,
+                            max(
+                                (state["time_s"] + physical_dt * done / total_samples) / time_limit,
+                                (state["step"] + done / total_samples) / update_limit if monitor else 0,
+                            ),
                         ),
+                        saturation=monitor.summary() if monitor else None,
                         samples_completed=done,
                         samples_total=total_samples,
                         nodes=len(mesh.nodes),
@@ -701,7 +732,7 @@ def run_job(directory: str, distribution_root: str):
                 delta_voltage = float(np.max(np.abs(charge_phi - zero_phi)))
                 factor = min(1, config.numerics.max_voltage_change_v / max(delta_voltage, 1e-30))
                 accepted_dt *= factor
-                if accepted_dt < config.numerics.duration_s * 1e-10:
+                if accepted_dt < min(nominal_dt, time_limit) * 1e-10:
                     raise RuntimeError("帯電時間刻みが過小です。流束・電位変化目標・形状を確認してください。")
                 for key, value in ledger.items():
                     ledger[key] = value * factor
@@ -733,6 +764,21 @@ def run_job(directory: str, distribution_root: str):
             state["step"] += 1
             state["rng"] = rng.bit_generator.state
             phi, field, field_diag = solver.solve(sigma, config.waveform.voltage(0))
+            if monitor:
+                monitor.observe(
+                    state["time_s"],
+                    sigma,
+                    phi,
+                    ledger["injected_absolute_c"],
+                    ledger["unresolved_absolute_c"],
+                )
+                state["saturation"] = monitor.summary()
+            if monitor and monitor.state["saturated"]:
+                state["termination_reason"] = "saturated"
+            elif state["time_s"] >= time_limit * (1 - 1e-12):
+                state["termination_reason"] = "time_limit" if monitor else "time_completed"
+            elif monitor and state["step"] >= update_limit:
+                state["termination_reason"] = "update_limit"
             balance = state["ledger"]
             residual = (
                 balance["injected_c"]
@@ -764,6 +810,7 @@ def run_job(directory: str, distribution_root: str):
                     flight_to_rf_period=rf_ratio,
                     gas_collision_probability_lower_estimate=collision_probability,
                     frozen_rf_validated=rf_ratio < 0.01,
+                    **({"saturation": monitor.summary()} if monitor else {}),
                     **field_diag,
                 )
             )
@@ -775,7 +822,6 @@ def run_job(directory: str, distribution_root: str):
                 metadata["warnings"].append(
                     "RF飛行時間が周期の1%以上です。凍結RF位相近似を再評価してください。"
                 )
-            save_checkpoint(checkpoint, state, sigma, histogram, depth_azimuth, metadata)
             write_results(
                 directory,
                 mesh,
@@ -788,20 +834,49 @@ def run_job(directory: str, distribution_root: str):
                 metadata,
                 derived,
                 state["step"] % config.numerics.save_every_steps == 0
-                or state["time_s"] >= config.numerics.duration_s * (1 - 1e-12),
+                or bool(state.get("termination_reason")),
                 trajectory_fields,
             )
+            # A resumable accepted update has complete outputs, including its final snapshot.
+            save_checkpoint(checkpoint, state, sigma, histogram, depth_azimuth, metadata)
+            if monitor:
+                progress(
+                    "running",
+                    "帯電更新・飽和判定",
+                    step=state["step"],
+                    time_s=state["time_s"],
+                    progress=min(0.99, max(state["time_s"] / time_limit, state["step"] / update_limit)),
+                    saturation=monitor.summary(),
+                    backend=config.numerics.backend,
+                )
         combine_time_series(directory)
+        reason = state.get("termination_reason", "time_completed")
+        stages = {
+            "saturated": "飽和判定成立（指定許容差内）",
+            "time_limit": "最大時間で終了（未飽和）",
+            "update_limit": "最大更新回数で終了（未飽和）",
+            "time_completed": "計算完了",
+        }
         progress(
             "completed",
-            "計算完了",
-            progress=1,
+            stages[reason],
+            progress=min(1, max(state["time_s"] / time_limit, state["step"] / update_limit))
+            if monitor
+            else 1,
             time_s=state["time_s"],
             steps=state["step"],
             backend=config.numerics.backend,
+            termination_reason=reason,
+            saturation=monitor.summary() if monitor else None,
         )
     except Paused:
-        progress("paused", "保存済みの帯電更新点で停止（途中のバッチは再開時に再計算）")
+        progress(
+            "paused",
+            "保存済みの帯電更新点で停止（途中のバッチは再開時に再計算）",
+            time_s=state["time_s"],
+            step=state["step"],
+            saturation=state.get("saturation"),
+        )
     except Exception as error:
         progress("failed", str(error), error_type=type(error).__name__)
         # Details remain local to the job; no credentials or input payload are logged.

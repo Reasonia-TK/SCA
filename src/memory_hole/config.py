@@ -105,6 +105,19 @@ class Surface(InputModel):
     source: str = "未校正・検証用の定数係数"
 
 
+class SaturationCriteria(InputModel):
+    max_time_s: float = Field(default=1e-3, gt=0)
+    max_updates: int = Field(default=10000, ge=1, le=100000)
+    window_s: float = Field(default=1e-5, gt=0)
+    steps_per_window: int = Field(default=4, ge=1, le=10000)
+    min_windows: int = Field(default=3, ge=1, le=10000)
+    consecutive_windows: int = Field(default=5, ge=2, le=1000)
+    voltage_tolerance_v: float = Field(default=0.1, gt=0)
+    charge_relative_tolerance: float = Field(default=0.01, ge=0, lt=1)
+    charge_absolute_tolerance_c_m2: float = Field(default=1e-7, gt=0)
+    max_unresolved_fraction: float = Field(default=0.01, ge=0, lt=1)
+
+
 class Numerics(InputModel):
     samples_per_species: int = Field(default=1000, ge=10, le=1000000)
     batch_size: int = Field(default=1000, ge=10, le=100000)
@@ -121,6 +134,8 @@ class Numerics(InputModel):
     field_rtol: float = Field(default=1e-9, gt=0, lt=0.01)
     backend: Literal["cpu", "gpu"] = "cpu"
     save_every_steps: int = Field(default=1, ge=1, le=10000)
+    run_until: Literal["time", "saturation"] = "time"
+    saturation: SaturationCriteria = Field(default_factory=SaturationCriteria)
 
 
 class CaseConfig(InputModel):
@@ -155,6 +170,8 @@ class CaseConfig(InputModel):
 
     @model_validator(mode="after")
     def validate_species(self):
+        if self.numerics.run_until == "saturation" and self.mode != "self_consistent":
+            raise ValueError("飽和判定は自己無撞着帯電モードで使用してください。")
         if not self.ions or any(s.charge_number <= 0 for s in self.ions):
             raise ValueError("正の電荷を持つイオン種を1種以上指定してください。")
         if len({s.name for s in self.ions}) != len(self.ions):

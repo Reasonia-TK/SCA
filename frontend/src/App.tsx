@@ -33,6 +33,12 @@ const labels: Obj = {
   completed: "完了",
   failed: "失敗",
 };
+const terminationLabels: Obj = {
+  saturated: "飽和判定成立（指定許容差内）",
+  time_limit: "最大時間で終了（未飽和）",
+  update_limit: "最大更新回数で終了（未飽和）",
+  time_completed: "指定時間の計算完了",
+};
 async function api(path: string, data?: any) {
   const response = await fetch(
     "/api" + path,
@@ -142,6 +148,7 @@ export default function App() {
     [comparisons, setComparisons] = useState<Obj[]>([]);
   const [advanced, setAdvanced] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
+  const saturationDefaults = useRef<Obj>({});
   const activeJobRef = useRef("");
   const setJob = useCallback((id: string) => {
     activeJobRef.current = id;
@@ -163,6 +170,7 @@ export default function App() {
   );
   useEffect(() => {
     api("/defaults").then((v) => {
+      saturationDefaults.current = v.config.numerics.saturation;
       setConfig(v.config);
       setDerived(v.derived);
     });
@@ -336,6 +344,10 @@ export default function App() {
     );
   const g = config.geometry,
     n = config.numerics;
+  const saturationMode = n.run_until === "saturation";
+  const saturation = { ...saturationDefaults.current, ...n.saturation };
+  const updateSaturation = (key: string, value: number) =>
+    update("numerics.saturation", { ...saturation, [key]: value });
   const d = derived?.dummies[Math.min(selected, g.dummy_count - 1)];
   const figConfig = tab === "設定" ? config : (jobConfig ?? config);
   const figDerived = tab === "設定" ? derived : (result?.derived ?? derived);
@@ -772,11 +784,36 @@ export default function App() {
                           "自己無撞着帯電",
                           "輸送・電荷・電場を更新",
                         ],
+                        [
+                          "saturation",
+                          "飽和帯電まで",
+                          "許容差内で安定したら終了",
+                        ],
                       ].map(([value, label, hint]) => (
                         <button
                           key={value}
-                          onClick={() => update("mode", value)}
-                          className={config.mode === value ? "active" : ""}
+                          onClick={() =>
+                            setConfig((previous) => {
+                              const next = structuredClone(previous!);
+                              next.mode =
+                                value === "saturation"
+                                  ? "self_consistent"
+                                  : value;
+                              next.numerics.run_until =
+                                value === "saturation" ? "saturation" : "time";
+                              next.numerics.saturation = saturation;
+                              return next;
+                            })
+                          }
+                          className={
+                            (
+                              value === "saturation"
+                                ? saturationMode
+                                : !saturationMode && config.mode === value
+                            )
+                              ? "active"
+                              : ""
+                          }
                         >
                           <span className="radio" />
                           <div>
@@ -925,22 +962,125 @@ export default function App() {
                         step={100}
                       />
                       <NumberField
-                        label="帯電時間"
-                        value={n.duration_s * 1e6}
+                        label={saturationMode ? "最大計算時間" : "帯電時間"}
+                        value={
+                          (saturationMode
+                            ? saturation.max_time_s
+                            : n.duration_s) * 1e6
+                        }
                         onChange={(v: number) =>
-                          update("numerics.duration_s", v * 1e-6)
+                          saturationMode
+                            ? updateSaturation("max_time_s", v * 1e-6)
+                            : update("numerics.duration_s", v * 1e-6)
                         }
                         unit="µs"
                         step={0.1}
                       />
                       <NumberField
-                        label="帯電更新数（目安）"
-                        value={n.charging_steps}
+                        label={
+                          saturationMode
+                            ? "判定窓内の更新数（目安）"
+                            : "帯電更新数（目安）"
+                        }
+                        value={
+                          saturationMode
+                            ? saturation.steps_per_window
+                            : n.charging_steps
+                        }
                         onChange={(v: number) =>
-                          update("numerics.charging_steps", v)
+                          saturationMode
+                            ? updateSaturation("steps_per_window", v)
+                            : update("numerics.charging_steps", v)
                         }
                         unit=""
                       />
+                      {saturationMode && (
+                        <>
+                          <NumberField
+                            label="判定時間幅"
+                            value={saturation.window_s * 1e6}
+                            onChange={(v: number) =>
+                              updateSaturation("window_s", v * 1e-6)
+                            }
+                            unit="µs"
+                            step={0.1}
+                          />
+                          <NumberField
+                            label="電位変化の許容値"
+                            value={saturation.voltage_tolerance_v}
+                            onChange={(v: number) =>
+                              updateSaturation("voltage_tolerance_v", v)
+                            }
+                            unit="V"
+                            step={0.01}
+                          />
+                          <NumberField
+                            label="表面電荷の相対許容値"
+                            value={saturation.charge_relative_tolerance * 100}
+                            onChange={(v: number) =>
+                              updateSaturation(
+                                "charge_relative_tolerance",
+                                v / 100,
+                              )
+                            }
+                            unit="%"
+                            step={0.1}
+                            min={0}
+                          />
+                          <NumberField
+                            label="表面電荷の絶対許容値"
+                            value={saturation.charge_absolute_tolerance_c_m2}
+                            onChange={(v: number) =>
+                              updateSaturation(
+                                "charge_absolute_tolerance_c_m2",
+                                v,
+                              )
+                            }
+                            unit="C/m²"
+                            step={1e-8}
+                          />
+                          <NumberField
+                            label="判定開始までの観測窓数"
+                            value={saturation.min_windows}
+                            onChange={(v: number) =>
+                              updateSaturation("min_windows", v)
+                            }
+                            unit="窓"
+                            min={1}
+                          />
+                          <NumberField
+                            label="必要な連続安定窓数"
+                            value={saturation.consecutive_windows}
+                            onChange={(v: number) =>
+                              updateSaturation("consecutive_windows", v)
+                            }
+                            unit="窓"
+                            min={2}
+                          />
+                          <NumberField
+                            label="最大帯電更新回数"
+                            value={saturation.max_updates}
+                            onChange={(v: number) =>
+                              updateSaturation("max_updates", v)
+                            }
+                            unit="回"
+                            min={1}
+                          />
+                          <NumberField
+                            label="未解決電荷の許容割合"
+                            value={saturation.max_unresolved_fraction * 100}
+                            onChange={(v: number) =>
+                              updateSaturation(
+                                "max_unresolved_fraction",
+                                v / 100,
+                              )
+                            }
+                            unit="%"
+                            step={0.1}
+                            min={0}
+                          />
+                        </>
+                      )}
                       <NumberField
                         label="アニメーション用の代表軌道数"
                         value={n.representative_trajectories}
@@ -952,6 +1092,12 @@ export default function App() {
                         max={1000}
                       />
                     </div>
+                    {saturationMode && (
+                      <p className="note">
+                        電位と表面電荷分布の変化が、指定した時間幅で連続して許容差内になったら終了します。
+                        最大時間・更新回数までに判定が成立しなければ「未飽和」で終了します。
+                      </p>
+                    )}
                     <p className="note">
                       0～1000本を指定できます。保存する合計を粒子種に配分します。
                       例えば60本なら、イオン1種と電子で各30本が目安です。
@@ -1277,11 +1423,28 @@ export default function App() {
                       onClick={() => setJob(j.id)}
                     >
                       <div className="job-card-top">
-                        <span className={"status-label " + j.status}>
-                          {labels[j.status]}
+                        <span
+                          className={
+                            "status-label " +
+                            (j.status === "completed" &&
+                            j.run_until === "saturation" &&
+                            j.termination_reason !== "saturated"
+                              ? "limited"
+                              : j.status)
+                          }
+                        >
+                          {j.status === "completed" &&
+                          j.run_until === "saturation"
+                            ? j.termination_reason === "saturated"
+                              ? "飽和判定成立"
+                              : "終了・未飽和"
+                            : labels[j.status]}
                         </span>
                         <span>
-                          {j.backend.toUpperCase()} · {labels[j.mode]}
+                          {j.backend.toUpperCase()} ·{" "}
+                          {j.run_until === "saturation"
+                            ? "飽和帯電まで"
+                            : labels[j.mode]}
                         </span>
                       </div>
                       <h3>{j.name}</h3>
@@ -1290,7 +1453,23 @@ export default function App() {
                         <div style={{ width: (j.progress ?? 0) * 100 + "%" }} />
                       </div>
                       <div className="job-metadata">
-                        <span>{percent(j.progress ?? 0)}</span>
+                        <span>
+                          {j.run_until === "saturation"
+                            ? `上限使用 ${percent(j.progress ?? 0)}`
+                            : percent(j.progress ?? 0)}
+                        </span>
+                        {j.run_until === "saturation" && (
+                          <span>
+                            {fmt((j.time_s ?? 0) * 1e6, 1)} µs / 最大
+                            {fmt(j.maximum_time_s * 1e6, 1)} µs
+                          </span>
+                        )}
+                        {j.saturation && (
+                          <span>
+                            連続安定 {j.saturation.consecutive} /{" "}
+                            {j.saturation.required} 窓
+                          </span>
+                        )}
                         <span>{fmt(j.elapsed_s, 1)} s</span>
                         {j.particles_per_s && (
                           <span>{fmt(j.particles_per_s, 0)} 粒子/s</span>
@@ -1439,6 +1618,55 @@ export default function App() {
                     />
                   </Panel>
                   <div>
+                    {result.run_until === "saturation" && (
+                      <Panel title="表示時刻の飽和判定">
+                        <p className="hint">
+                          {terminationLabels[result.termination_reason] ??
+                            "飽和判定を継続中"}
+                        </p>
+                        <dl className="info-list">
+                          <dt>確認済み時間窓</dt>
+                          <dd>{result.saturation?.windows ?? 0}</dd>
+                          <dt>連続安定窓</dt>
+                          <dd>
+                            {result.saturation?.consecutive ?? 0} /{" "}
+                            {result.saturation?.required ?? "—"}
+                          </dd>
+                          <dt>最大電位変化</dt>
+                          <dd>
+                            {fmt(
+                              result.saturation?.last_window
+                                ?.max_voltage_change_v,
+                              5,
+                            )}{" "}
+                            V
+                          </dd>
+                          <dt>電荷密度変化（面積平均）</dt>
+                          <dd>
+                            {sci(
+                              result.saturation?.last_window
+                                ?.density_change_c_m2,
+                            )}{" "}
+                            C/m²
+                          </dd>
+                          <dt>電荷密度の許容値</dt>
+                          <dd>
+                            {sci(
+                              result.saturation?.last_window
+                                ?.density_tolerance_c_m2,
+                            )}{" "}
+                            C/m²
+                          </dd>
+                          <dt>未解決電荷の割合</dt>
+                          <dd>
+                            {percent(
+                              result.saturation?.last_window
+                                ?.unresolved_fraction,
+                            )}
+                          </dd>
+                        </dl>
+                      </Panel>
+                    )}
                     <Panel title="計算情報">
                       <dl className="info-list">
                         <dt>メッシュ節点</dt>

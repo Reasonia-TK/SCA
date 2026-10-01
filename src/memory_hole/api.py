@@ -178,6 +178,8 @@ def jobs():
                     "name": config["name"],
                     "mode": config["mode"],
                     "backend": config["numerics"]["backend"],
+                    "run_until": config["numerics"].get("run_until", "time"),
+                    "maximum_time_s": config["numerics"].get("saturation", {}).get("max_time_s", 1e-3),
                     **read_status(directory),
                 }
             )

@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 
 from memory_hole import engine
-from memory_hole.config import CaseConfig
+from memory_hole.config import CaseConfig, SaturationCriteria
 from memory_hole.field import FieldSolver, build_mesh
 from memory_hole.geometry import derive
 from memory_hole.transport import AMU, E_CHARGE, boundary_maps, sample_generated, trace
@@ -234,6 +234,81 @@ def test_charge_balance_and_checkpoint_resume(tmp_path, monkeypatch):
                 assert phase.attrs["phase_deg"] == path.attrs["rf_phase_deg"]
                 assert phase.attrs["field_time_s"] == path.attrs["field_time_s"]
                 assert path.attrs["field_time_s"] < snapshot.attrs["time_s"]
+
+
+def saturation_case():
+    c = CaseConfig()
+    c.mode = "self_consistent"
+    c.numerics.run_until = "saturation"
+    c.numerics.samples_per_species = 10
+    c.numerics.phase_bins = 1
+    c.numerics.save_every_steps = 3
+    c.ions[0].flux_m2_s = 0
+    c.electron.flux_m2_s = 0
+    c.initial_sigma_c_m2 = 1e-4
+    c.leakage_tau_s = 5e-7
+    c.numerics.saturation = SaturationCriteria(
+        max_time_s=20e-6,
+        window_s=1e-6,
+        steps_per_window=2,
+        min_windows=2,
+        consecutive_windows=2,
+        charge_relative_tolerance=0,
+        charge_absolute_tolerance_c_m2=1e-6,
+        voltage_tolerance_v=0.1,
+    )
+    return c
+
+
+def test_saturation_leakage_and_resume_mid_window(tmp_path, monkeypatch):
+    c = saturation_case()
+    full, interrupted = tmp_path / "saturation_full", tmp_path / "saturation_interrupted"
+    assert job(full, c)["termination_reason"] == "saturated"
+    original = engine.atomic_json
+
+    def stop_mid_window(path, value):
+        original(path, value)
+        if path.parent == interrupted and path.name == "status.json" and value.get("step") == 1:
+            (interrupted / "pause.request").touch()
+
+    monkeypatch.setattr(engine, "atomic_json", stop_mid_window)
+    assert job(interrupted, c)["status"] == "paused"
+    state, *_ = engine.load_checkpoint(interrupted / "checkpoint.h5")
+    assert state["saturation"]["windows"] == 0
+    assert state["saturation_state"]["max_density_change_c_m2"] > 0
+    monkeypatch.setattr(engine, "atomic_json", original)
+    (interrupted / "pause.request").unlink()
+    engine.run_job(str(interrupted), str(tmp_path / "distributions"))
+    a, sigma_a, *_ = engine.load_checkpoint(full / "checkpoint.h5")
+    b, sigma_b, *_ = engine.load_checkpoint(interrupted / "checkpoint.h5")
+    assert b["termination_reason"] == "saturated"
+    assert a["time_s"] == b["time_s"] < c.numerics.saturation.max_time_s
+    assert a["saturation"] == b["saturation"]
+    assert a["rng"] == b["rng"]
+    assert np.array_equal(sigma_a, sigma_b)
+    assert np.allclose(sigma_a, c.initial_sigma_c_m2 * np.exp(-a["time_s"] / c.leakage_tau_s), rtol=1e-12)
+    result = json.loads((full / "preview.json").read_text(encoding="utf-8"))
+    assert result["termination_reason"] == "saturated"
+    with h5py.File(full / "results.h5") as h5:
+        assert h5["time_series"][f"{a['step']:05}"].attrs["time_s"] == a["time_s"]
+
+
+@pytest.mark.parametrize("reason", ["time_limit", "update_limit"])
+def test_saturation_limits_are_not_successful_saturation(tmp_path, reason):
+    c = saturation_case()
+    c.initial_sigma_c_m2 = 0
+    c.leakage_tau_s = None
+    c.numerics.saturation.min_windows = 3
+    c.numerics.saturation.max_time_s = 1.5e-6 if reason == "time_limit" else 20e-6
+    c.numerics.saturation.max_updates = 3 if reason == "update_limit" else 100
+    c.numerics.save_every_steps = 7
+    directory = tmp_path / reason
+    status = job(directory, c)
+    assert status["termination_reason"] == reason
+    assert not status["saturation"]["saturated"]
+    assert status["steps"] == 3
+    assert "未飽和" in status["stage"]
+    assert (directory / "snapshots" / "00003.json").exists()
 
 
 def test_supplied_pair():
