@@ -150,6 +150,41 @@ def job(directory, config):
     return status
 
 
+def test_large_timed_checkpoint_round_trip(tmp_path):
+    times = np.linspace(0, 1e-9, 128).tolist()
+    state = {
+        "trajectories": [
+            {
+                "species": "Ar+" if index < 500 else "electron",
+                "source_species": "Ar+" if index < 500 else "electron",
+                "points_nm": [[float(index), float(point), float(point) / 3] for point in range(128)],
+                "times_s": times,
+                "phase_index": 0,
+                "rf_phase_deg": 180.0,
+                "field_time_s": 0.0,
+            }
+            for index in range(1000)
+        ]
+    }
+    arrays = (np.arange(3.0), np.zeros((2, 3)), np.zeros((2, 4, 5)))
+    meta = {"representative_paths": 1000}
+    checkpoint = tmp_path / "large_checkpoint.h5"
+    engine.save_checkpoint(checkpoint, state, *arrays, meta)
+    restored, *restored_arrays, restored_meta = engine.load_checkpoint(checkpoint)
+    assert restored == state
+    assert restored_meta == meta
+    for expected, actual in zip(arrays, restored_arrays, strict=True):
+        assert np.array_equal(expected, actual)
+    with h5py.File(tmp_path / "large_trajectories.h5", "w") as result:
+        engine.write_trajectory_data(result, state["trajectories"], {})
+        assert len(result["trajectories"]) == 1000
+        assert len(result["trajectory_times"]) == 1000
+        assert np.array_equal(result["trajectory_times/999"][:], times)
+        assert np.array_equal(
+            result["trajectories/999"][:], np.array(state["trajectories"][-1]["points_nm"]) * 1e-9
+        )
+
+
 def test_charge_balance_and_checkpoint_resume(tmp_path, monkeypatch):
     c = CaseConfig()
     c.mode = "self_consistent"

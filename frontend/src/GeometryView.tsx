@@ -4,6 +4,7 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 
 function dispose(object: THREE.Object3D) {
   object.traverse((o: any) => {
+    if (o.isInstancedMesh) o.dispose();
     o.geometry?.dispose();
     if (o.material)
       Array.isArray(o.material)
@@ -25,6 +26,7 @@ export default function GeometryView({
   const sceneRef = useRef<THREE.Scene | null>(null);
   const metalRef = useRef<THREE.Mesh[]>([]);
   const tracks = useRef<any[]>([]);
+  const markersRef = useRef<THREE.InstancedMesh | null>(null);
   const playbackRef = useRef(playback);
   playbackRef.current = playback;
   const [view, setView] = useState("3d");
@@ -182,20 +184,21 @@ export default function GeometryView({
     };
     renderer.domElement.addEventListener("pointerdown", pointerDown);
     renderer.domElement.addEventListener("pointerup", pointerUp);
+    const markerTransform = new THREE.Object3D();
     let frame = 0;
     const render = () => {
       const playback = playbackRef.current;
+      const markers = markersRef.current;
+      if (markers) markers.visible = !!playback?.enabled;
       for (const track of tracks.current) {
         if (!playback?.enabled) {
           track.line.geometry.setDrawRange(0, track.points.length);
-          track.marker.visible = false;
           continue;
         }
         const knots = playback.timed ? track.times : track.distances;
         const value = playback.timed
           ? playback.progress * playback.endTime
           : playback.progress;
-        track.marker.visible = value >= knots[0];
         let low = 0,
           high = knots.length - 1;
         while (low < high) {
@@ -208,11 +211,16 @@ export default function GeometryView({
           0,
           Math.min(1, (value - knots[low]) / (knots[next] - knots[low] || 1)),
         );
-        track.marker.position
+        markerTransform.position
           .copy(track.points[low])
           .lerp(track.points[next], fraction);
+        markerTransform.scale.setScalar(value >= knots[0] ? 1 : 0);
+        markerTransform.updateMatrix();
+        markers?.setMatrixAt(track.markerIndex, markerTransform.matrix);
         track.line.geometry.setDrawRange(0, value < knots[0] ? 0 : low + 1);
       }
+      if (markers && playback?.enabled)
+        markers.instanceMatrix.needsUpdate = true;
       controls.update();
       renderer.render(scene, camera);
       frame = requestAnimationFrame(render);
@@ -227,6 +235,7 @@ export default function GeometryView({
       renderer.domElement.remove();
       sceneRef.current = null;
       tracks.current = [];
+      markersRef.current = null;
     };
   }, [geometryKey, onSelect, view]);
   useEffect(() => {
@@ -242,12 +251,24 @@ export default function GeometryView({
     if (!scene || !result || view !== "3d") return;
     const group = new THREE.Group();
     const newTracks: any[] = [];
-    (result.trajectories ?? []).forEach((path: any) => {
+    const paths = (result.trajectories ?? []).filter(
+      (path: any) => path.points_nm.length >= 2,
+    );
+    const markers = new THREE.InstancedMesh(
+      new THREE.SphereGeometry(0.013, 12, 8),
+      new THREE.MeshBasicMaterial({ depthTest: false }),
+      paths.length,
+    );
+    markers.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    markers.frustumCulled = false;
+    markers.renderOrder = 5;
+    markers.visible = false;
+    group.add(markers);
+    paths.forEach((path: any, markerIndex: number) => {
       const points = path.points_nm.map(
         (p: number[]) =>
           new THREE.Vector3(p[0] / 1000, -p[2] / 1000, p[1] / 1000),
       );
-      if (points.length < 2) return;
       const color = path.species.toLowerCase().includes("electron")
         ? "#179d90"
         : "#e68831";
@@ -259,23 +280,19 @@ export default function GeometryView({
           opacity: 0.75,
         }),
       );
-      const marker = new THREE.Mesh(
-        new THREE.SphereGeometry(0.013, 12, 8),
-        new THREE.MeshBasicMaterial({ color, depthTest: false }),
-      );
-      marker.renderOrder = 5;
+      markers.setColorAt(markerIndex, new THREE.Color(color));
       const distances = [0];
       for (let i = 1; i < points.length; i++)
         distances.push(distances[i - 1] + points[i].distanceTo(points[i - 1]));
       const total = distances.at(-1) || 1;
       newTracks.push({
         line,
-        marker,
+        markerIndex,
         points,
         distances: distances.map((value) => value / total),
         times: path.times_s ?? distances.map((value) => value / total),
       });
-      group.add(line, marker);
+      group.add(line);
     });
     const source =
       display === "charge"
@@ -348,10 +365,12 @@ export default function GeometryView({
     }
     scene.add(group);
     tracks.current = newTracks;
+    markersRef.current = markers;
     return () => {
       scene.remove(group);
       dispose(group);
       if (tracks.current === newTracks) tracks.current = [];
+      if (markersRef.current === markers) markersRef.current = null;
     };
   }, [result, display, geometryKey, view]);
   if (!derived)

@@ -115,7 +115,7 @@ class Numerics(InputModel):
     particle_dt_s: float = Field(default=2e-12, gt=0)
     cell_fraction: float = Field(default=0.2, gt=0, le=0.5)
     phase_bins: int = Field(default=4, ge=1, le=64)
-    representative_trajectories: int = Field(default=12, ge=0, le=100)
+    representative_trajectories: int = Field(default=12, ge=0, le=1000)
     relative_ci_target: float = Field(default=0.02, gt=0, lt=1)
     max_voltage_change_v: float = Field(default=10, gt=0)
     field_rtol: float = Field(default=1e-9, gt=0, lt=0.01)
